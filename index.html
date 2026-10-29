@@ -95,6 +95,8 @@ button,input,textarea,select{font:inherit;color:inherit}
 .slot{display:flex;flex-direction:column;gap:10px;align-items:center}
 .slot .card{--card-fs:12px}
 .slot-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.btn.play{width:300px;max-width:100%;min-height:60px;font-size:24px;letter-spacing:.04em}
+.btn.play svg{width:22px;height:22px}
 .new-hero{width:300px;max-width:100%;aspect-ratio:5/7;border:3px dashed rgba(155,213,106,.45);border-radius:18px;background:rgba(155,213,106,.06);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;cursor:pointer;font:800 30px/1.05 var(--display);color:var(--ink);transition:background .15s, transform .15s;padding:20px;text-align:center}
 .new-hero:hover{background:rgba(155,213,106,.13);transform:translateY(-3px)}
 .new-hero .plus{width:72px;height:72px;border-radius:50%;background:var(--moss);color:#14200d;font:900 48px/72px var(--body)}
@@ -210,6 +212,20 @@ textarea.text-in{font-size:18px;font-weight:600;min-height:84px;resize:vertical}
 
 #printSheet{display:none}
 
+/* ---------- play mode: one card filling the device, for use at the table instead of a printout ---------- */
+.play-view{position:fixed;inset:0;z-index:30;background:var(--night);display:flex;flex-direction:column;
+  padding:max(6px, env(safe-area-inset-top, 0px)) max(6px, env(safe-area-inset-right, 0px)) max(6px, env(safe-area-inset-bottom, 0px)) max(6px, env(safe-area-inset-left, 0px))}
+.play-bar{flex:none;display:flex;padding-bottom:6px}
+.play-bar .btn{background:rgba(14,22,18,.9)}
+.play-stage{flex:1;min-height:0;min-width:0;container-type:size;display:flex;align-items:center;justify-content:center}
+/* card is 25.2em wide and 5:7 tall (35.28em), so size the em to whichever side runs out first */
+.play-stage .card{--card-fs:min(100cqw / 25.2, 100cqh / 35.28);max-width:none;box-shadow:none}
+@media (orientation:landscape){
+  .play-view{flex-direction:row}
+  .play-bar{padding:0 6px 0 0;align-items:flex-start}
+}
+body.playing{overflow:hidden}
+
 @media (max-width:860px){
   .builder{grid-template-columns:1fr}
   .preview{position:static;display:flex;flex-direction:column;align-items:center}
@@ -230,7 +246,7 @@ textarea.text-in{font-size:18px;font-weight:600;min-height:84px;resize:vertical}
 @page{size:letter;margin:.4in}
 @media print{
   body{background:#fff;padding:0;color:#000}
-  .backdrop,.fireflies,#app,.toast{display:none!important}
+  .backdrop,.fireflies,#app,.toast,.play-view{display:none!important}
   #printSheet{display:grid;grid-template-columns:repeat(2,3.5in);gap:.3in;justify-content:center}
   #printSheet .card{--card-fs:10pt;width:25.2em;max-width:none;box-shadow:none;break-inside:avoid;page-break-inside:avoid}
 }
@@ -251,6 +267,10 @@ textarea.text-in{font-size:18px;font-weight:600;min-height:84px;resize:vertical}
 </div>
 
 <div id="printSheet" aria-hidden="true"></div>
+<div class="play-view" id="playView" role="dialog" aria-modal="true" aria-label="Hero card" hidden>
+  <div class="play-bar"><button class="btn small" data-act="play-exit">&larr; Back to party</button></div>
+  <div class="play-stage" id="playStage"></div>
+</div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <input type="file" id="importFile" accept=".json,application/json" hidden>
 
@@ -463,6 +483,7 @@ function renderParty(){
   const slots = party.heroes.map(h=>`
     <div class="slot">
       ${cardHTML(h)}
+      <button class="btn primary play" data-act="play" data-id="${h.id}"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>Play</button>
       <div class="slot-actions">
         ${confirmDelete===h.id
           ? `<span style="align-self:center;font-weight:800">Remove ${esc(h.name)}?</span>
@@ -666,6 +687,7 @@ document.addEventListener("click", e=>{
   if(!b) return;
   if(b.id==="homeBtn"){ goHome(); return; }
   const act = b.dataset.act;
+  if(act==="play-exit"){ exitPlay(); return; }
 
   if(b.dataset.players){ party.players = +b.dataset.players; save(); render(); return; }
 
@@ -675,6 +697,7 @@ document.addEventListener("click", e=>{
     else if(act==="del"){ confirmDelete=b.dataset.id; render(); }
     else if(act==="del-no"){ confirmDelete=null; render(); }
     else if(act==="del-yes"){ const h=party.heroes.find(x=>x.id===b.dataset.id); party.heroes=party.heroes.filter(x=>x.id!==b.dataset.id); confirmDelete=null; save(); render(); toast(`${h?h.name:"Hero"} left the party`); }
+    else if(act==="play"){ playCard(party.heroes.find(h=>h.id===b.dataset.id)); }
     else if(act==="print-one"){ printCards([party.heroes.find(h=>h.id===b.dataset.id)]); }
     else if(act==="print-all"){ printCards(party.heroes); }
     else if(act==="export"){ exportParty(); }
@@ -752,6 +775,42 @@ function saveDraft(){
   toast(`${hero.name} joined the party!`);
 }
 function goHome(){ view="party"; draft=null; confirmDelete=null; render(); scrollTo({top:0}); }
+
+/* ============ play mode ============ */
+// Full screen where the browser allows it (not iPhone Safari), keep the screen awake,
+// and push a history entry so the phone's Back gesture returns to the party.
+let wakeLock = null;
+function playCard(h){
+  if(!h) return;
+  $("#playStage").innerHTML = cardHTML(h);
+  $("#playView").hidden = false;
+  document.body.classList.add("playing");
+  fitCards($("#playStage"));
+  history.pushState({play:h.id}, "");
+  const el = document.documentElement;
+  if(el.requestFullscreen) el.requestFullscreen({navigationUI:"hide"}).catch(()=>{});
+  else if(el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  if(navigator.wakeLock) navigator.wakeLock.request("screen").then(l=>wakeLock=l).catch(()=>{});
+  $("#playView .btn").focus({preventScroll:true});
+}
+function exitPlay(){ if(history.state && history.state.play) history.back(); else closePlay(); }
+function closePlay(){
+  if($("#playView").hidden) return;
+  $("#playView").hidden = true;
+  $("#playStage").innerHTML = "";
+  document.body.classList.remove("playing");
+  if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{});
+  else if(document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+  if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock = null; }
+}
+addEventListener("popstate", closePlay);
+addEventListener("resize", ()=>{ if(!$("#playView").hidden) fitCards($("#playStage")); });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape" && !$("#playView").hidden) exitPlay(); });
+// the browser drops the wake lock when the tab is hidden; take it back on return
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState==="visible" && !$("#playView").hidden && navigator.wakeLock)
+    navigator.wakeLock.request("screen").then(l=>wakeLock=l).catch(()=>{});
+});
 
 /* ============ print / export / import ============ */
 function printCards(list){

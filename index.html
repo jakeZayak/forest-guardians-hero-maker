@@ -185,8 +185,10 @@ textarea.text-in{font-size:18px;font-weight:600;min-height:84px;resize:vertical}
 }
 .card::before{content:"";position:absolute;inset:0;background:linear-gradient(180deg, rgba(5,8,7,.25) 0%, rgba(5,8,7,.55) 35%, rgba(5,8,7,.72) 100%);pointer-events:none}
 .card > *{position:relative}
-.card-head{display:grid;grid-template-columns:1fr auto;align-items:end;gap:.4em;min-height:7.6em;margin-bottom:.5em}
-.card-head .nm{font:900 2.15em/1 var(--body);text-shadow:0 .1em .4em rgba(0,0,0,.8);overflow-wrap:anywhere}
+.card-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:.4em;min-height:7.6em;margin-bottom:.5em}
+/* --nm is shrunk by fitCards so long names wrap only between words */
+.card-head .nm{font:900 calc(2.15em * var(--nm,1))/1 var(--body);text-shadow:0 .1em .4em rgba(0,0,0,.8)}
+.card-head .nm.squeeze{overflow-wrap:anywhere}
 .card-head .nm.empty{color:rgba(255,255,255,.45)}
 .card-head .cls{font:800 1.5em/1 var(--display);color:var(--gc,#fff);margin-top:.15em;letter-spacing:.03em;text-shadow:0 .1em .3em rgba(0,0,0,.8)}
 .card-head img{height:8em;width:auto;max-width:7.5em;object-fit:contain;margin-bottom:-.3em;filter:drop-shadow(0 .3em .5em rgba(0,0,0,.7))}
@@ -463,9 +465,14 @@ function cardHTML(h){
     </div>
   </article>`;
 }
-/* shrink box text a little if a long custom power would overflow the card */
+/* shrink the name until every word fits on a line and it's at most 3 lines (about the portrait's height),
+   and shrink box text a little if a long custom power would overflow the card */
 function fitCards(root=document){
   root.querySelectorAll(".card").forEach(c=>{
+    const nm = c.querySelector(".nm"), em = parseFloat(getComputedStyle(c).fontSize);
+    let n = 1; nm.classList.remove("squeeze"); c.style.setProperty("--nm", n);
+    while((nm.scrollWidth > nm.clientWidth + 1 || nm.offsetHeight > 6.6*em) && n > .5){ n -= .05; c.style.setProperty("--nm", n.toFixed(2)); }
+    if(nm.scrollWidth > nm.clientWidth + 1) nm.classList.add("squeeze");
     let f = 1; c.style.setProperty("--fit", f);
     const g = c.querySelector(".cgroup");
     let guard = 0;
